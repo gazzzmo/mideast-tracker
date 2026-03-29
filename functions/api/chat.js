@@ -1,20 +1,22 @@
 /**
- * Cloudflare Pages Function — /api/chat
+ * Cloudflare Pages Function — handles POST /api/chat
  *
- * This file lives at functions/api/chat.js which means Cloudflare Pages
- * automatically routes POST /api/chat here — no separate Worker deployment needed.
+ * File path: functions/api/chat.js
+ * This maps automatically to the route: /api/chat
  *
- * Set your API key in the Pages dashboard:
- *   Settings → Environment variables → Add variable
- *   Name: ANTHROPIC_API_KEY  (mark as "Secret")
+ * Set your secret in the Cloudflare Pages dashboard:
+ *   Settings → Environment variables → ANTHROPIC_API_KEY (encrypted)
  */
 
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
 
-export async function onRequestPost({ request, env }) {
+// POST handler — proxies request to Anthropic with the server-side API key
+export async function onRequestPost(context) {
+  const { request, env } = context;
+
   if (!env.ANTHROPIC_API_KEY) {
     return Response.json(
-      { error: "ANTHROPIC_API_KEY not configured in Pages environment variables" },
+      { error: "ANTHROPIC_API_KEY is not set in Pages environment variables." },
       { status: 500 }
     );
   }
@@ -26,27 +28,39 @@ export async function onRequestPost({ request, env }) {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  // Safety: strip any key accidentally sent by client
+  // Never forward an API key from the client
   delete body.api_key;
 
-  const upstream = await fetch(ANTHROPIC_API, {
-    method: "POST",
+  let upstream;
+  try {
+    upstream = await fetch(ANTHROPIC_API, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    return Response.json(
+      { error: `Failed to reach Anthropic API: ${err.message}` },
+      { status: 502 }
+    );
+  }
+
+  const responseText = await upstream.text();
+
+  return new Response(responseText, {
+    status: upstream.status,
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": env.ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
+      "Access-Control-Allow-Origin": "*",
     },
-    body: JSON.stringify(body),
-  });
-
-  const text = await upstream.text();
-  return new Response(text, {
-    status: upstream.status,
-    headers: { "Content-Type": "application/json" },
   });
 }
 
-// Handle OPTIONS preflight (needed if you ever call from a different origin)
+// OPTIONS handler — CORS preflight
 export async function onRequestOptions() {
   return new Response(null, {
     status: 204,
