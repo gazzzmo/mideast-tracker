@@ -17,7 +17,7 @@ mideast-tracker/
 │   └── index.css        ← Global reset
 ├── functions/
 │   └── api/
-│       └── chat.js      ← Cloudflare Pages Function (API proxy)
+│       └── chat.js      ← Cloudflare Pages Function (API proxy)...
 ├── worker/
 │   └── index.js         ← Standalone Worker (alternative deployment)
 ├── public/
