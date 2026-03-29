@@ -1,0 +1,3 @@
+# Cloudflare Pages SPA redirect rule
+# Sends all non-file requests to index.html so React Router works
+/*    /index.html   200
