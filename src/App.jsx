@@ -1,8 +1,24 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
-// In production this hits the Cloudflare Worker proxy.
-// In local dev, Vite proxies /api → localhost:8787 (see vite.config.js).
 const API_URL = "/api/chat";
+
+// ─── Date helpers ─────────────────────────────────────────────────────────────
+
+const CRISIS_DATE = "2026-02-28";
+
+function toYMD(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function formatDisplayDate(ymd) {
+  const [year, month, day] = ymd.split("-");
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return `${parseInt(day)} ${months[parseInt(month) - 1]} ${year}`;
+}
+
+const TODAY_YMD = toYMD(new Date());
+
+// ─── Indicators ───────────────────────────────────────────────────────────────
 
 const INDICATORS = [
   { id: "brent_crude", label: "Brent Crude",  unit: "USD/bbl", icon: "🛢️", color: "#f97316", description: "International oil benchmark" },
@@ -16,24 +32,30 @@ const INDICATORS = [
   { id: "eu_gas",      label: "EU Gas (TTF)",  unit: "€/MWh",  icon: "🔥", color: "#f43f5e", description: "European energy benchmark" },
 ];
 
+// ─── Fetch ────────────────────────────────────────────────────────────────────
+
 async function fetchIndicatorData(indicatorId, label, unit) {
-  const userPrompt = `You are a financial data assistant with knowledge of global markets in early 2026, including the US-Israel war on Iran that began around late February 2026 causing Strait of Hormuz disruption and a major energy shock.
+  const today = TODAY_YMD;
+
+  const userPrompt = `You are a financial data assistant with knowledge of global markets in 2026, including the US-Israel war on Iran that began on 28 February 2026 causing Strait of Hormuz disruption and a major global energy shock.
 
 Provide plausible historical daily data for: ${label} (unit: ${unit})
 
 YOUR ENTIRE RESPONSE MUST BE ONLY A JSON OBJECT. No markdown. No code fences. No explanation text before or after. Start your response with { and end with }.
 
 Required JSON schema:
-{"indicator":"${indicatorId}","label":"${label}","unit":"${unit}","data":[{"date":"2026-02-01","value":75.5,"note":""},{"date":"2026-02-07","value":76.2,"note":"Pre-crisis baseline"}],"summary":"2-3 sentences about key movements and crisis impact.","currentValue":107.0,"crisisImpact":"negative","changeFromPreCrisis":"+35.2% since crisis began"}
+{"indicator":"${indicatorId}","label":"${label}","unit":"${unit}","data":[{"date":"2026-02-28","value":75.5,"note":""},{"date":"2026-03-07","value":95.2,"note":"Hormuz closure confirmed"}],"summary":"2-3 sentences about key movements and crisis impact.","currentValue":107.0,"crisisImpact":"negative","changeFromPreCrisis":"+35.2% since crisis began"}
 
 Requirements:
-- data: 25 entries, dates from 2026-02-01 to 2026-03-28, spaced every few days
+- data: approximately 25-35 entries covering ${CRISIS_DATE} through ${today}, spaced every 2-3 days
+- The first entry must be ${CRISIS_DATE} showing pre-crisis or early-crisis levels
+- The last entry must be as close to ${today} as your knowledge allows
 - values: realistic numbers for ${label} in ${unit}
-- note: empty string "" for normal days; brief text on key crisis dates (Feb 28, Mar 2-3, Mar 20, Mar 26)
-- crisisImpact: "negative" if bad for households/economy, "positive" if it benefits (e.g. gold), "neutral" otherwise
-- currentValue: the last data point value as a number
+- note: empty string "" for normal days; brief text on notable crisis dates
+- crisisImpact: "negative" if bad for households/economy, "positive" if it benefits (e.g. gold, defence), "neutral" otherwise
+- currentValue: the value of the most recent data point
 - changeFromPreCrisis: string like "+35.2% since crisis began"
-- The crisis caused oil to surge from ~$75 to $107+ Brent; VIX from ~16 to 28+; gold rose; AUD/USD fell; ASX fell; S&P fell; EU gas nearly doubled`;
+- Known crisis context: oil surged from ~$75 to $107+ Brent; VIX rose from ~16 to 28+; gold rose; AUD/USD fell; ASX fell; S&P fell; EU gas nearly doubled from ~€32 to €60+`;
 
   const response = await fetch(API_URL, {
     method: "POST",
@@ -66,7 +88,6 @@ Requirements:
     throw new Error("No text in response");
   }
 
-  // Strip any accidental markdown fences
   const stripped = rawText
     .replace(/^[\s\S]*?```json\s*/i, "")
     .replace(/^[\s\S]*?```\s*/i, "")
@@ -106,17 +127,15 @@ function Sparkline({ data, color, width = 260, height = 55 }) {
   const toY = v => height - ((v - min) / range) * (height - 6) - 3;
   const pts = data.map((d, i) => `${(i / (data.length - 1)) * width},${toY(d.value)}`).join(" ");
 
-  const crisisIdx = data.findIndex(d => d.date >= "2026-02-28");
-  const crisisX   = crisisIdx >= 0 ? (crisisIdx / (data.length - 1)) * width : null;
-  const lastX     = width;
-  const lastY     = toY(values[values.length - 1]);
+  // Mark crisis onset (first data point is crisis start)
+  const crisisX = 0;
+  const lastX   = width;
+  const lastY   = toY(values[values.length - 1]);
 
   return (
     <svg width={width} height={height} style={{ overflow: "visible", display: "block" }}>
-      {crisisX !== null && (
-        <line x1={crisisX} y1={0} x2={crisisX} y2={height}
-          stroke="#ef4444" strokeWidth={1} strokeDasharray="3,2" opacity={0.5} />
-      )}
+      <line x1={crisisX} y1={0} x2={crisisX} y2={height}
+        stroke="#ef4444" strokeWidth={1} strokeDasharray="3,2" opacity={0.5} />
       <polyline points={pts} fill="none" stroke={color}
         strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
       <circle cx={lastX} cy={lastY} r={3.5} fill={color} />
@@ -162,19 +181,23 @@ function IndicatorCard({ indicator, autoFetch, onFetch }) {
     result?.crisisImpact === "negative" ? "#ef4444" :
     result?.crisisImpact === "positive" ? "#10b981" : "#6b7280";
 
-  const cardStyle = {
-    background: "rgba(15,20,35,0.85)",
-    border: `1px solid ${state === "done" ? indicator.color + "35" : "rgba(255,255,255,0.07)"}`,
-    borderRadius: "12px",
-    padding: "18px",
-    cursor: state === "done" ? "pointer" : "default",
-    boxShadow: state === "done" ? `0 0 18px ${indicator.color}12` : "none",
-    transition: "border-color 0.4s, box-shadow 0.4s",
-  };
+  // Get first and last date from data for sparkline labels
+  const firstDate = result?.data?.[0]?.date;
+  const lastDate  = result?.data?.[result.data.length - 1]?.date;
 
   return (
-    <div style={cardStyle} onClick={() => state === "done" && setExpanded(e => !e)}>
-
+    <div
+      style={{
+        background: "rgba(15,20,35,0.85)",
+        border: `1px solid ${state === "done" ? indicator.color + "35" : "rgba(255,255,255,0.07)"}`,
+        borderRadius: "12px",
+        padding: "18px",
+        cursor: state === "done" ? "pointer" : "default",
+        boxShadow: state === "done" ? `0 0 18px ${indicator.color}12` : "none",
+        transition: "border-color 0.4s, box-shadow 0.4s",
+      }}
+      onClick={() => state === "done" && setExpanded(e => !e)}
+    >
       {/* Header row */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "10px" }}>
         <div>
@@ -244,9 +267,12 @@ function IndicatorCard({ indicator, autoFetch, onFetch }) {
           <div style={{ marginTop: "8px" }}>
             <Sparkline data={result.data} color={indicator.color} />
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: "3px" }}>
-              <span style={{ color: "#1e293b", fontSize: "9px", fontFamily: "'DM Mono', monospace" }}>1 Feb</span>
-              <span style={{ color: "rgba(239,68,68,0.5)", fontSize: "9px", fontFamily: "'DM Mono', monospace" }}>↑ Crisis onset</span>
-              <span style={{ color: "#1e293b", fontSize: "9px", fontFamily: "'DM Mono', monospace" }}>28 Mar</span>
+              <span style={{ color: "#ef444460", fontSize: "9px", fontFamily: "'DM Mono', monospace" }}>
+                ↑ {firstDate ? formatDisplayDate(firstDate) : "28 Feb 2026"}
+              </span>
+              <span style={{ color: "#334155", fontSize: "9px", fontFamily: "'DM Mono', monospace" }}>
+                {lastDate ? formatDisplayDate(lastDate) : TODAY_YMD}
+              </span>
             </div>
           </div>
 
@@ -272,7 +298,7 @@ function IndicatorCard({ indicator, autoFetch, onFetch }) {
                     {[...result.data].reverse().map((row, i) => (
                       <tr key={i} style={{ borderTop: "1px solid rgba(255,255,255,0.025)" }}>
                         <td style={{
-                          color: row.date >= "2026-02-28" ? "#fca5a5" : "#475569",
+                          color: "#fca5a5",
                           fontSize: "10px", padding: "2px 4px", fontFamily: "'DM Mono', monospace",
                         }}>{row.date}</td>
                         <td style={{
@@ -350,8 +376,8 @@ export default function App() {
           </div>
           <div style={{ display: "flex", gap: "20px", flexWrap: "wrap", paddingLeft: "17px" }}>
             {[
-              ["◆", "#f97316", "Coverage: 1 Feb – 28 Mar 2026"],
-              ["◆", "#ef4444", "Crisis onset: ~28 Feb 2026"],
+              ["◆", "#f97316", `Coverage: 28 Feb 2026 – ${formatDisplayDate(TODAY_YMD)}`],
+              ["◆", "#ef4444", "Crisis onset: 28 Feb 2026"],
               ["◆", "#8b5cf6", `${counts.done}/${INDICATORS.length} loaded`],
             ].map(([sym, col, text], i) => (
               <div key={i} style={{ color: "#475569", fontSize: "11px", fontFamily: "'DM Mono', monospace" }}>
@@ -369,9 +395,9 @@ export default function App() {
         }}>
           <span style={{ flexShrink: 0 }}>⚠️</span>
           <div style={{ color: "#94a3b8", fontSize: "11px", lineHeight: "1.6" }}>
-            US-Israel military action on Iran began late February 2026, disrupting the Strait of Hormuz and
+            US-Israel military action on Iran began 28 February 2026, disrupting the Strait of Hormuz and
             triggering a global energy shock. Data is AI-generated based on known market events from this
-            period. The dashed red line on each chart marks crisis onset (~28 Feb). Click any loaded card
+            period. Each chart covers crisis onset through {formatDisplayDate(TODAY_YMD)}. Click any loaded card
             to expand the full daily data table.
           </div>
         </div>
